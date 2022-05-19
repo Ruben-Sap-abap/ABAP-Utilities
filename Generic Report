@@ -1,0 +1,522 @@
+*&---------------------------------------------------------------------*
+*& Report ZREP_TEMPLATE
+*&---------------------------------------------------------------------*
+*& Author: Rúben Reis
+*& Version: 1.0
+*& Description: Generic fully functional report template
+*&---------------------------------------------------------------------*
+REPORT zrep_template.
+
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+"Class section - Definition
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+CLASS local_class DEFINITION.
+  PUBLIC SECTION.
+    INTERFACES: if_salv_csqt_content_manager.
+    CONSTANTS: BEGIN OF c,
+                 ekko         TYPE string VALUE 'EKKO',
+                 ekko_ebeln   TYPE string VALUE 'EBELN',
+                 ekko_bukrs   TYPE string VALUE 'BUKRS',
+                 ekko_bstyp   TYPE string VALUE 'BSTYP',
+                 ekko_statu   TYPE string VALUE 'STATU',
+                 ekko_aedat   TYPE string VALUE 'AEDAT',
+                 title        TYPE string VALUE 'Results display',
+                 alv_function TYPE string VALUE 'Function',
+                 ekko_lifnr   TYPE string VALUE 'LIFNR',
+                 ekpo_matnr   TYPE string VALUE 'MATNR',
+                 sign         TYPE string VALUE 'I',
+                 option       TYPE string VALUE 'EQ',
+                 po_type      TYPE bstyp VALUE 'F',
+               END OF c.
+
+    TYPES: BEGIN OF s_params,
+             std_alv TYPE flag,
+           END OF s_params.
+
+    TYPES: BEGIN OF s_alv,
+             ebeln TYPE ekko-ebeln,
+             bukrs TYPE ekko-bukrs,
+             bstyp TYPE ekko-bstyp,
+             bsart TYPE ekko-bsart,
+             statu TYPE ekko-statu,
+             aedat TYPE ekko-aedat,
+             ernam TYPE ekko-ernam,
+             lifnr TYPE ekko-lifnr,
+           END OF s_alv,
+
+           t_alv  TYPE STANDARD TABLE OF s_alv WITH DEFAULT KEY,
+
+           s_ekpo TYPE ekpo.
+
+    TYPES: BEGIN OF s_selopt_high_capacity,
+             sign   TYPE selopt-sign,
+             option TYPE selopt-option,
+             low    TYPE char100,
+             high   TYPE char100,
+           END OF s_selopt_high_capacity,
+
+           t_selopt_high_capacity TYPE STANDARD TABLE OF s_selopt_high_capacity WITH DEFAULT KEY.
+
+    METHODS: "! General execution
+      "! @parameter ir_docs | range for P.O. document numbers
+      "! @parameter ir_dtype | range for P.O. document types
+      "! @parameter ir_date | range for P.O. document dates
+      "! @parameter ir_vends | range for P.O. document vendors
+      "! @parameter ir_mats | range for P.O. document items materials
+      "! @parameter is_params | structure with parameters/flags that will be needed for the report logic execution
+      exec IMPORTING ir_docs   TYPE ANY TABLE
+                     ir_dtype  TYPE ANY TABLE
+                     ir_date   TYPE ANY TABLE
+                     ir_vends  TYPE ANY TABLE
+                     ir_mats   TYPE ANY TABLE
+                     is_params TYPE s_params.
+
+    "! Generate a class instance and only one instance (singleton)
+    "! @parameter return | instance of the class
+    CLASS-METHODS get_instance RETURNING VALUE(return) TYPE REF TO local_class.
+
+    CLASS-DATA instance TYPE REF TO local_class.
+
+  PROTECTED SECTION.
+    CLASS-DATA: alv_instance TYPE REF TO cl_salv_table,
+                alv_data     TYPE t_alv.
+    DATA: r_doc_nrs       TYPE RANGE OF ekko-ebeln,
+          r_doc_types     TYPE RANGE OF ekko-bsart,
+          r_doc_dates     TYPE RANGE OF ekko-aedat,
+          r_doc_materials TYPE RANGE OF ekpo-matnr,
+          r_doc_vendors   TYPE RANGE OF ekko-lifnr,
+          container       TYPE REF TO cl_gui_custom_container.
+
+    METHODS: "! Get data from the Data Base
+             "! @parameter ir_doc_nrs | range for P.O. document numbers
+             "! @parameter ir_doc_types | range for P.O. document types
+             "! @parameter ir_doc_dates | range for P.O. document dates
+             "! @parameter return | Data Base data in the custom alv format
+             query_data IMPORTING ir_doc_nrs    TYPE ANY TABLE
+                                  ir_doc_types  TYPE ANY TABLE
+                                  ir_doc_dates  TYPE ANY TABLE
+                        RETURNING VALUE(return) TYPE t_alv,
+
+      "! Logic to arrange the data
+      "! @parameter c_data | data to be arranged
+      process_data CHANGING c_data TYPE t_alv,
+
+      "! Execution of the display of the custom alv (salv) with the custom function/button event
+      exec_custom_alv,
+
+      "! Execution of the display of the alv (salv) of the tcode ME80FN
+      exec_standard_alv,
+
+      "! Alv (salv) custom data display
+      "! @parameter io_container | Container that will have the alv.
+      "! This will be part of the logic in order to be possible to add custom buttons without a status gui
+      "! @parameter c_data | Data to be presented
+      display_custom_data  IMPORTING io_container TYPE REF TO cl_gui_custom_container
+                           CHANGING  c_data       TYPE t_alv,
+
+      "! Set the report ranges into the instance attributes of the class
+      "! @parameter ir_doc_nrs | range for P.O. document numbers
+      "! @parameter ir_doc_types | range for P.O. document types
+      "! @parameter ir_doc_dates | range for P.O. document dates
+      "! @parameter ir_doc_vends | range for P.O. document vendors
+      "! @parameter ir_doc_mats | range for P.O. document items materials
+      set_parameters IMPORTING ir_doc_nrs   LIKE r_doc_nrs
+                               ir_doc_types LIKE r_doc_types
+                               ir_doc_dates LIKE r_doc_dates
+                               ir_doc_vends LIKE r_doc_vendors
+                               ir_doc_mats  LIKE r_doc_materials,
+
+      "! Get the report ranges the instance attributes, of the class
+      "! @parameter er_doc_nrs | range for P.O. document numbers
+      "! @parameter er_doc_types | range for P.O. document types
+      "! @parameter er_doc_dates | range for P.O. document dates
+      "! @parameter er_doc_vends | range for P.O. document vendors
+      "! @parameter er_doc_mats | range for P.O. document items materials
+      get_parameters EXPORTING er_doc_nrs   LIKE r_doc_nrs
+                               er_doc_types LIKE r_doc_types
+                               er_doc_dates LIKE r_doc_dates
+                               er_doc_vends LIKE r_doc_vendors
+                               er_doc_mats  LIKE r_doc_materials,
+
+      "! Alv (salv) ME80FN data display
+      "! @parameter e_data_ref | Data reference
+      "! @parameter e_field_catalog | Field catalog
+      display_standard_alv_data EXPORTING e_data_ref      TYPE data
+                                          e_field_catalog TYPE lvc_t_fcat,
+
+      "! Set a range into the table type rsparams which will be used to call the tcode ME80FN
+      "! @parameter ir_range | The range
+      "! @parameter i_field_name | The corresponding field name of the report/tcode
+      "! @parameter c_selscreen_fields | The report/tcode parameter table
+      set_range_into_selscreen IMPORTING ir_range           TYPE t_selopt_high_capacity
+                                         i_field_name       TYPE string
+                               CHANGING  c_selscreen_fields TYPE ty_rsparams,
+
+      "! User event method that will be invoked when the alv custom button is pressed
+      "! @parameter !e_salv_function | The event function
+      user_event FOR EVENT added_function OF cl_salv_events
+        IMPORTING
+          !e_salv_function,
+
+      "! Logic to the custom button event
+      process_alv_function,
+
+      "!Alv (salv) refresh logic. If changes to the data are made, after the custom button press,
+      "! this method will come in handy
+      refresh_custom_alv,
+
+      "! Set the alv data into a class instance attribute
+      "! @parameter i_data |
+      set_custom_alv_data IMPORTING i_data TYPE t_alv,
+
+      "! Get the alv data from a class instance attribute
+      "! @parameter return |
+      get_custom_alv_data RETURNING VALUE(return) TYPE t_alv,
+
+      "! Construct the table with the parameters to pass onto the tcode ME80FN
+      "! @parameter return |
+      construct_selscreen_params RETURNING VALUE(return) TYPE ty_rsparams.
+  PRIVATE SECTION.
+ENDCLASS.                    "local_class DEFINITION
+
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+"Class section - Implementation
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+CLASS local_class IMPLEMENTATION.
+
+  METHOD exec.
+    me->set_parameters( EXPORTING
+                            ir_doc_nrs   = ir_docs
+                            ir_doc_types = ir_dtype
+                            ir_doc_dates = ir_date
+                            ir_doc_vends = ir_vends
+                            ir_doc_mats  = ir_mats ).
+    IF is_params-std_alv EQ abap_false.
+      me->exec_custom_alv( ).
+    ELSE.
+      me->exec_standard_alv(  ).
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD get_instance.
+    return = instance = COND #( WHEN instance IS INITIAL THEN NEW local_class(  )
+                                ELSE instance ).
+  ENDMETHOD.
+
+  METHOD query_data.
+    SELECT ebeln, bukrs, bstyp, bsart,
+           statu, aedat, ernam, lifnr
+    FROM ekko
+    INTO TABLE @return
+    WHERE ebeln IN @ir_doc_nrs
+    AND   bstyp IN @ir_doc_types
+    AND   aedat IN @ir_doc_dates
+    ORDER BY PRIMARY KEY.
+    IF sy-subrc NE 0.
+      "Does Nothing
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD process_data.
+    "Only for demonstration purposes: Loop group at by document type
+    LOOP AT c_data ASSIGNING FIELD-SYMBOL(<data>)
+        GROUP BY ( bsart = <data>-bsart )
+                  ASSIGNING FIELD-SYMBOL(<group_data>).
+
+      DATA(members) = VALUE t_alv(  ).
+      LOOP AT GROUP <group_data> ASSIGNING FIELD-SYMBOL(<group>).
+        members = VALUE #( BASE members ( <group> ) ).
+      ENDLOOP.
+
+      LOOP AT members ASSIGNING FIELD-SYMBOL(<member>).
+        "Access to each register of the grouped data
+      ENDLOOP.
+    ENDLOOP.
+  ENDMETHOD.
+
+  METHOD exec_custom_alv.
+    me->get_parameters( IMPORTING
+                            er_doc_nrs   = DATA(r_doc_nrs)
+                            er_doc_types = DATA(r_doc_types)
+                            er_doc_dates = DATA(r_doc_dates) ).
+
+    DATA(alv_data) = me->query_data( ir_doc_nrs   = r_doc_nrs
+                                     ir_doc_types = r_doc_types
+                                     ir_doc_dates = r_doc_dates ).
+
+    me->process_data( CHANGING c_data = alv_data ).
+
+    set_custom_alv_data( alv_data ).
+
+    CALL FUNCTION 'SALV_CSQT_CREATE_CONTAINER'
+      EXPORTING
+        r_content_manager = me
+        title             = c-title.
+  ENDMETHOD.
+
+  METHOD if_salv_csqt_content_manager~fill_container_content.
+    display_custom_data(
+      EXPORTING
+        io_container = r_container
+      CHANGING
+        c_data = alv_data
+    ).
+  ENDMETHOD.
+
+  METHOD display_custom_data.
+    DATA: columns    TYPE REF TO cl_salv_columns,
+          column     TYPE REF TO cl_salv_column_table,
+          functions  TYPE REF TO cl_salv_functions_list,
+          selections TYPE REF TO cl_salv_selections.
+    TRY.
+        IF c_data IS NOT INITIAL.
+          alv_data = c_data.
+          cl_salv_table=>factory( EXPORTING
+                                    r_container    = io_container
+                                  IMPORTING
+                                    r_salv_table   =  alv_instance
+                                  CHANGING
+                                    t_table        = alv_data ).
+          DATA(events) = alv_instance->get_event( ).
+          IF events IS NOT INITIAL.
+            SET HANDLER user_event FOR events.
+          ENDIF.
+          functions = alv_instance->get_functions( ).
+          functions->set_all( abap_true ).
+          columns = alv_instance->get_columns( ).
+          columns->set_optimize( abap_true ).
+          selections = alv_instance->get_selections( ).
+          selections->set_selection_mode( if_salv_c_selection_mode=>row_column ).
+          TRY.
+              column ?= columns->get_column( columnname = 'LIFNR' ).
+              column->set_visible( value  = abap_false ).
+
+              column ?= columns->get_column( 'BSART' ).
+              column->set_short_text( 'Doc. Type' ). "10 Chars Max
+              column->set_medium_text( 'Document Type' ).
+              column->set_long_text( 'Document Type' ).
+
+              column ?= columns->get_column( 'EBELN' ).
+              column->set_ddic_reference( VALUE salv_s_ddic_reference( table = c-ekko
+                                                                       field = c-ekko_ebeln ) ).
+              column ?= columns->get_column( 'AEDAT' ).
+              column->set_ddic_reference( VALUE salv_s_ddic_reference( table = c-ekko
+                                                                       field = c-ekko_aedat ) ).
+              column ?= columns->get_column( 'BUKRS' ).
+              column->set_ddic_reference( VALUE salv_s_ddic_reference( table = c-ekko
+                                                                       field = c-ekko_bukrs ) ).
+              column ?= columns->get_column( 'STATU' ).
+              column->set_ddic_reference( VALUE salv_s_ddic_reference( table = c-ekko
+                                                                       field = c-ekko_statu ) ).
+              column ?= columns->get_column( 'BSTYP' ).
+              column->set_ddic_reference( VALUE salv_s_ddic_reference( table = c-ekko
+                                                                       field = c-ekko_bstyp ) ).
+            CATCH cx_salv_not_found.                    "#EC NO_HANDLER
+          ENDTRY.
+
+          "Add custom function
+          functions->add_function( name     = CONV #( c-alv_function )
+                                   icon     = CONV string( icon_edit_file )
+                                   text     = CONV string( 'Custom function' )
+                                   tooltip  = CONV string( 'Custom function' )
+                                   position = if_salv_c_function_position=>right_of_salv_functions ).
+          alv_instance->display( ).
+        ELSE.
+          MESSAGE 'No data to display' TYPE 'S' DISPLAY LIKE 'E'.
+        ENDIF.
+      CATCH cx_salv_msg INTO DATA(cx_alv_msg). " ALV: General Error Class with Message
+        MESSAGE cx_alv_msg->get_text(  ) TYPE 'S' DISPLAY LIKE 'E'.
+      CATCH cx_salv_existing INTO DATA(cx_alv_existing).
+        MESSAGE cx_alv_existing->get_text(  ) TYPE 'S' DISPLAY LIKE 'E'.
+      CATCH cx_salv_wrong_call INTO DATA(cx_alv_call).
+        MESSAGE cx_alv_call->get_text(  ) TYPE 'S' DISPLAY LIKE 'E'.
+    ENDTRY.
+  ENDMETHOD.
+
+  METHOD user_event.
+    CASE e_salv_function.
+      WHEN c-alv_function.
+        process_alv_function(  ).
+      WHEN OTHERS.
+        "Implement the logic here
+    ENDCASE.
+  ENDMETHOD.
+
+  METHOD get_parameters.
+    er_doc_nrs      = me->r_doc_nrs.
+    er_doc_types    = me->r_doc_types.
+    er_doc_dates    = me->r_doc_dates.
+  ENDMETHOD.
+
+  METHOD set_parameters.
+    me->r_doc_nrs   = ir_doc_nrs.
+    me->r_doc_types = ir_doc_types.
+    me->r_doc_dates = ir_doc_dates.
+  ENDMETHOD.
+
+  METHOD process_alv_function.
+    DATA(rows) = alv_instance->get_selections( )->get_selected_rows( ).
+    IF rows IS NOT INITIAL.
+      DATA(selected_alv_data) = VALUE t_alv( FOR <row> IN rows ( VALUE #( alv_data[ <row> ] OPTIONAL ) ) ).
+    ELSE.
+      "No selected rows
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD exec_standard_alv.
+
+    display_standard_alv_data(  ).
+
+  ENDMETHOD.
+
+  METHOD display_standard_alv_data.
+    FIELD-SYMBOLS: <fs_data> TYPE STANDARD TABLE.
+    DATA(selscreen_fields) = me->construct_selscreen_params( ).
+    cl_salv_bs_runtime_info=>set(
+           EXPORTING display  = abap_false
+                     metadata = abap_true
+                     data     = abap_true ).
+
+    "Note: if you want to use a variant, use the syntax 'USING SELECTION-SET i_var' instead of the selection-table
+    SUBMIT aqzz/sapquery/meme80fn======== WITH SELECTION-TABLE selscreen_fields AND RETURN.
+    TRY.
+        cl_salv_bs_runtime_info=>get_data_ref( IMPORTING r_data = DATA(r_data) ).
+        cl_salv_bs_runtime_info=>clear_all( ).
+        IF r_data IS NOT INITIAL.
+          ASSIGN r_data->* TO <fs_data>.
+          cl_salv_table=>factory( IMPORTING r_salv_table = DATA(lo_table)
+                                  CHANGING  t_table      = <fs_data> ).
+          lo_table->display( ).
+
+          "It's always possible to access the metadata info (field catalog, layouts, aggregations, etc):
+***        DATA(metadata) = cl_salv_bs_runtime_info=>get_metadata( ).
+***        DATA(lt_fcat) = cl_salv_controller_metadata=>get_lvc_fieldcatalog(
+***                                                             r_columns      = lo_table->get_columns( )
+***                                                             r_aggregations = lo_table->get_aggregations( ) ).
+***        DATA(lo_result) = cl_salv_ex_util=>factory_result_data_table(
+***                                                             r_data         = r_data
+***                                                             t_fieldcatalog = lt_fcat ).
+        ELSE.
+          "Implement Logic Here
+        ENDIF.
+      CATCH cx_salv_bs_sc_runtime_info INTO DATA(exp_runtime).
+        DATA(exp_text) = exp_runtime->get_text( ).
+        MESSAGE 'Error in executing the tcode ME80FN:' && exp_text TYPE 'S' DISPLAY LIKE 'E'.
+      CATCH cx_salv_msg INTO DATA(exp_alv).
+        exp_text = exp_runtime->get_text( ).
+        MESSAGE 'ALV Display error:' && exp_text TYPE 'S' DISPLAY LIKE 'E'.
+    ENDTRY.
+
+  ENDMETHOD.
+
+  METHOD set_range_into_selscreen.
+    DATA(selscreen_fields) = VALUE ty_rsparams( FOR <range> IN ir_range ( selname = i_field_name
+                                                                          kind    = 'S'
+                                                                          sign    = <range>-sign
+                                                                          option  = <range>-option
+                                                                          low     = <range>-low
+                                                                          high    = <range>-high ) ).
+    IF selscreen_fields IS NOT INITIAL.
+      APPEND LINES OF selscreen_fields TO c_selscreen_fields.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD construct_selscreen_params.
+    me->get_parameters( IMPORTING
+                            er_doc_nrs   = DATA(r_ebeln)
+                            er_doc_types = DATA(r_type)
+                            er_doc_dates = DATA(r_date)
+                            er_doc_vends = DATA(r_vendor)
+                            er_doc_mats  = DATA(r_mat) ).
+    me->set_range_into_selscreen( EXPORTING ir_range           = CONV #( r_ebeln )
+                                            i_field_name       = 'SP$00003'
+                                  CHANGING  c_selscreen_fields = return  ).
+    me->set_range_into_selscreen( EXPORTING ir_range           = VALUE t_selopt_high_capacity( ( sign = c-sign
+                                                                                                 option = c-option
+                                                                                                 low    = c-po_type ) )
+                                            i_field_name       = 'SP$00004'
+                                  CHANGING  c_selscreen_fields = return  ).
+    me->set_range_into_selscreen( EXPORTING ir_range           = CONV #( r_type )
+                                            i_field_name       = 'SP$00002'
+                                  CHANGING  c_selscreen_fields = return  ).
+    me->set_range_into_selscreen( EXPORTING ir_range           = CONV #( r_date )
+                                            i_field_name       = 'SP$00001'
+                                  CHANGING  c_selscreen_fields = return  ).
+    me->set_range_into_selscreen( EXPORTING ir_range           = CONV #( r_vendor )
+                                            i_field_name       = 'SP$00007'
+                                  CHANGING  c_selscreen_fields = return  ).
+    me->set_range_into_selscreen( EXPORTING ir_range           = CONV #( r_mat )
+                                            i_field_name       = 'MATNR'
+                                  CHANGING  c_selscreen_fields = return  ).
+  ENDMETHOD.
+
+  METHOD refresh_custom_alv.
+    get_parameters( IMPORTING er_doc_nrs   = DATA(r_doc_nrs)
+                              er_doc_types = DATA(r_doc_types)
+                              er_doc_dates = DATA(r_doc_dates) ).
+
+    DATA(alv_data) = query_data( ir_doc_nrs   = r_doc_nrs
+                                 ir_doc_types = r_doc_types
+                                 ir_doc_dates = r_doc_dates ).
+
+    me->process_data( CHANGING c_data = alv_data ).
+
+    set_custom_alv_data( alv_data  ).
+
+    alv_instance->refresh( ).
+
+    cl_gui_cfw=>flush( ).
+  ENDMETHOD.
+
+  METHOD get_custom_alv_data.
+    return = alv_data.
+  ENDMETHOD.
+
+  METHOD set_custom_alv_data.
+    alv_data = i_data.
+  ENDMETHOD.
+
+
+ENDCLASS.                    "local_classIMPLEMENTATION
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+"Report section
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+DATA: ekko_dummy TYPE local_class=>s_alv,
+      ekpo_dummy TYPE local_class=>s_ekpo.
+
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE TEXT-t01.
+PARAMETERS: rb_alv RADIOBUTTON GROUP rb1 USER-COMMAND rb1 DEFAULT 'X',
+            rb_std RADIOBUTTON GROUP rb1.
+
+SELECTION-SCREEN SKIP 1.
+
+SELECTION-SCREEN BEGIN OF BLOCK b02 WITH FRAME TITLE TEXT-t02.
+
+SELECT-OPTIONS: so_ebeln FOR ekko_dummy-ebeln,
+                so_bsart FOR ekko_dummy-bsart,
+                so_aedat FOR ekko_dummy-aedat,
+                so_lifnr FOR ekko_dummy-lifnr,
+                so_matnr FOR ekpo_dummy-matnr.
+
+SELECTION-SCREEN END OF BLOCK b02.
+
+SELECTION-SCREEN END OF BLOCK b01.
+
+AT SELECTION-SCREEN OUTPUT.
+  LOOP AT SCREEN.
+    screen-active = COND #( WHEN screen-name CS local_class=>c-ekpo_matnr OR screen-name CS local_class=>c-ekko_lifnr
+                            THEN COND #( WHEN rb_std IS NOT INITIAL
+                                         THEN 1
+                                         ELSE 0 )
+                            ELSE screen-active ).
+    MODIFY SCREEN.
+  ENDLOOP.
+
+START-OF-SELECTION.
+  local_class=>get_instance( )->exec( EXPORTING
+                                          ir_docs   = so_ebeln[]
+                                          ir_dtype  = so_bsart[]
+                                          ir_date   = so_aedat[]
+                                          ir_vends  = so_lifnr[]
+                                          ir_mats   = so_matnr[]
+                                          is_params = VALUE local_class=>s_params( std_alv = boolc( rb_std EQ abap_true )  ) ).
